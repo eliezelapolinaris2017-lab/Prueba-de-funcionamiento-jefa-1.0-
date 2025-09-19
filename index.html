@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Visor de Citas — Solo Lectura</title>
+<style>
+  :root{
+    --bg:#0f0f12; --fg:#fff; --muted:#a7a7b1; --card:#171821; --card2:#1e202b; --outline:#2a2d40; --accent:#93c5fd; --btn:#24263a;
+    --shadow:0 10px 30px rgba(0,0,0,.35); --radius:14px; --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Inter, Roboto, Arial;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; font-family:var(--font); color:var(--fg); background:#0f0f12}
+  .wrap{max-width:1100px; margin:1.2rem auto; padding:0 1rem 2rem}
+  .card{background:linear-gradient(180deg,var(--card),var(--card2)); border:1px solid var(--outline); border-radius:var(--radius); box-shadow:var(--shadow); padding:1rem}
+  h1{margin:.2rem 0 1rem; font-size:1.25rem}
+  .toolbar{display:flex; gap:.6rem; align-items:end; flex-wrap:wrap}
+  label{display:block; font-size:.85rem; color:var(--muted); margin:0 0 .25rem}
+  input,select{background:#11131a; color:#fff; border:1px solid var(--outline); border-radius:10px; padding:.6rem .7rem; outline:none; min-width:10ch}
+  input:focus,select:focus{border-color:var(--accent); box-shadow:0 0 0 3px rgba(147,197,253,.25)}
+  .spacer{flex:1}
+  .badge{padding:.24rem .6rem; border-radius:999px; border:1px solid var(--outline); background:#101323; color:#c7d2fe; font-size:.76rem}
+  .btn{cursor:pointer; border:1px solid var(--outline); background:var(--btn); color:#fff; border-radius:12px; padding:.6rem .9rem; box-shadow:var(--shadow)}
+  .btn:hover{transform:translateY(-1px)}
+  .summary{display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.7rem}
+  .chip{display:inline-flex; gap:.4rem; align-items:center; padding:.35rem .6rem; border:1px solid var(--outline); background:#0c0f1e; border-radius:999px; font-size:.82rem; color:#c7cff7}
+  .chip b{color:#fff}
+  table{width:100%; border-collapse:separate; border-spacing:0 10px; margin-top:.9rem}
+  th,td{padding:.7rem .8rem; text-align:left}
+  thead th{color:#cdd4ff; font-weight:600; font-size:.9rem}
+  tr.data{background:linear-gradient(180deg,#141726,#0f1220); border:1px solid var(--outline)}
+  tr.data td:first-child{border-top-left-radius:12px; border-bottom-left-radius:12px}
+  tr.data td:last-child{border-top-right-radius:12px; border-bottom-right-radius:12px}
+  .right{margin-left:auto; color:var(--muted); font-size:.85rem}
+  .actions{display:flex; gap:.35rem; align-items:center}
+
+  @media print{
+    body{background:#fff; color:#000}
+    .card{box-shadow:none; border:1px solid #ddd}
+    .toolbar .btn{display:none}
+    .summary .chip{background:#fff; color:#000; border-color:#ccc}
+    table th, table td{border-color:#ccc}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div style="display:flex; align-items:center; gap:.8rem; flex-wrap:wrap">
+      <h1 style="margin:.2rem 0">Visor de Citas (solo lectura)</h1>
+      <span class="spacer"></span>
+      <button id="btnPDF" class="btn">Exportar PDF</button>
+      <button id="btnWAListado" class="btn">WhatsApp listado</button>
+    </div>
+
+    <div class="toolbar">
+      <div>
+        <label>Cliente</label>
+        <input id="f_cliente" placeholder="Nombre o parte del nombre">
+      </div>
+      <div>
+        <label>Técnica</label>
+        <select id="f_emp"></select>
+      </div>
+      <div>
+        <label>Desde</label>
+        <input id="f_desde" type="date">
+      </div>
+      <div>
+        <label>Hasta</label>
+        <input id="f_hasta" type="date">
+      </div>
+      <label class="right" style="display:flex;align-items:center;gap:.4rem">
+        <input id="f_todas" type="checkbox"> Ver todas (incluye pasadas)
+      </label>
+      <span class="spacer"></span>
+      <div class="right"><span id="count" class="badge">0 citas</span></div>
+    </div>
+
+    <!-- Resumen por técnica (dinámico) -->
+    <div id="summary" class="summary"></div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Fecha</th><th>Hora</th><th>Cliente</th><th>Técnica</th><th>Servicio</th><th>Teléfono</th><th>Estado</th><th>WhatsApp</th>
+        </tr>
+      </thead>
+      <tbody id="tbl"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+/* ====== Claves y utilidades ====== */
+const K = { EMP:'sp_empleados', CITAS:'sp_citas', CFG:'sp_config' };
+const $  = s => document.querySelector(s);
+const todayISO = () => new Date().toISOString().slice(0,10);
+const load = (k,d=null)=>JSON.parse(localStorage.getItem(k)||JSON.stringify(d));
+
+/* ====== Datos auxiliares ====== */
+const emps = ()=> load(K.EMP,[]);
+const cfg  = ()=> load(K.CFG,{name:'', sub:'', waPhone:'', maps:''});
+const empName = id => (emps().find(e=>e.id===id)||{}).nombre || '—';
+
+/* ====== Filtros ====== */
+function renderTecnicas(){
+  const sel = $('#f_emp');
+  sel.innerHTML = `<option value="">Todas</option>` + emps()
+    .filter(e => e.activo===undefined ? true : +e.activo===1)
+    .map(e=>`<option value="${e.id}">${e.nombre||'(sin nombre)'}</option>`).join('');
+}
+
+/* ====== Resumen por técnica ====== */
+function renderResumen(citas){
+  const box = $('#summary');
+  const map = new Map();
+  citas.forEach(c=> map.set(c.emp||'', (map.get(c.emp||'')||0)+1));
+  const chips = [...map.entries()]
+    .sort((a,b)=>b[1]-a[1])
+    .map(([empId, n])=>`<span class="chip"><b>${empName(empId)}</b> · ${n} cita${n!==1?'s':''}</span>`);
+  box.innerHTML = chips.length ? chips.join(' ') : '';
+}
+
+/* ====== Obtener citas filtradas ====== */
+function getFiltered(){
+  const qCliente = ($('#f_cliente').value||'').trim().toLowerCase();
+  const selEmp   = $('#f_emp').value;
+  const d        = $('#f_desde').value;
+  const h        = $('#f_hasta').value;
+  const verTodas = $('#f_todas').checked;
+  const hoy = todayISO();
+
+  let citas = load(K.CITAS,[]);
+  if(!verTodas) citas = citas.filter(c => (c.fecha||'') >= hoy);
+  if(qCliente)  citas = citas.filter(c => (c.nombre||'').toLowerCase().includes(qCliente));
+  if(selEmp)    citas = citas.filter(c => c.emp === selEmp);
+  if(d)         citas = citas.filter(c => (c.fecha||'') >= d);
+  if(h)         citas = citas.filter(c => (c.fecha||'') <= h);
+
+  citas.sort((a,b)=> ((a.fecha||'')+(a.hora||'00:00')).localeCompare((b.fecha||'')+(b.hora||'00:00')));
+  return citas;
+}
+
+/* ====== Pintar tabla ====== */
+function renderCitas(){
+  const tb = $('#tbl');
+  const citas = getFiltered();
+  tb.innerHTML = citas.map(c=>{
+    const telefono = c.tel||'';
+    return `
+      <tr class="data">
+        <td>${c.fecha||''}</td>
+        <td>${c.hora||''}</td>
+        <td>${c.nombre||''}</td>
+        <td>${empName(c.emp)}</td>
+        <td>${c.srv||''}</td>
+        <td>${telefono}</td>
+        <td>${c.estado||'programada'}</td>
+        <td class="actions"><button class="btn" onclick="waCita('${c.id||''}')">WA</button></td>
+      </tr>`;
+  }).join('');
+  $('#count').textContent = `${citas.length} cita${citas.length!==1?'s':''}`;
+  renderResumen(citas);
+}
+
+/* ====== WhatsApp (mensaje por cita) ====== */
+function waCita(id){
+  const c = load(K.CITAS,[]).find(x=>x.id===id);
+  if(!c) return;
+  const C = cfg();
+  const fechaTxt = c.fecha ? new Date(c.fecha+'T'+(c.hora||'00:00')).toLocaleString('es-PR') : '';
+  const msg = encodeURIComponent(
+    `Hola ${c.nombre||''}, recordatorio de su cita:\n`+
+    `🗓 ${fechaTxt}\n👤 Técnica: ${empName(c.emp)}\n💈 Servicio: ${c.srv||'-'}\n`+
+    `${c.notas? '📝 Notas: '+c.notas+'\n':''}`+
+    `${C.maps? '📍 Ubicación: '+C.maps+'\n':''}`+
+    `¡Gracias!`
+  );
+  const phone = (c.tel || C.waPhone || '').replace(/\D/g,'');
+  if(!phone){ alert('No hay teléfono del cliente ni teléfono configurado en la app.'); return; }
+  window.open(`https://wa.me/${phone}?text=${msg}`,'_blank');
+}
+
+/* ====== WhatsApp (listado filtrado) ====== */
+function waListado(){
+  const C = cfg();
+  const citas = getFiltered();
+  if(citas.length===0){ alert('No hay citas en el listado.'); return; }
+
+  const resumen = citas.map(c=>{
+    const f = c.fecha || '';
+    const h = c.hora || '';
+    return `• ${f} ${h} — ${c.nombre||''} (${empName(c.emp)})${c.srv? ' — '+c.srv:''}`;
+  }).join('\n');
+
+  const titulo = C.name ? `*${C.name}* — Citas` : 'Citas';
+  const texto = encodeURIComponent(`${titulo}\n\n${resumen}`);
+  let dest = prompt('Número destino para WhatsApp (ej.: +1 787 000 0000).\nDejar vacío para usar el teléfono configurado en la app.');
+  dest = (dest && dest.trim()) || C.waPhone || '';
+  const phone = (dest||'').replace(/\D/g,'');
+  if(!phone){ alert('No hay número destino ni teléfono configurado.'); return; }
+  window.open(`https://wa.me/${phone}?text=${texto}`,'_blank');
+}
+
+/* ====== Exportar PDF (vista imprimible) ====== */
+function exportPDF(){
+  const C = cfg();
+  const citas = getFiltered();
+  const head = ['Fecha','Hora','Cliente','Técnica','Servicio','Teléfono','Estado'];
+  const rows = citas.map(c=>[
+    c.fecha||'', c.hora||'', c.nombre||'', empName(c.emp), c.srv||'', c.tel||'', c.estado||'programada'
+  ]);
+
+  const style = `
+  <style>
+    body{font-family:${getComputedStyle(document.documentElement).getPropertyValue('--font')||'ui-sans-serif,system-ui'}; padding:20px}
+    h2,h3{margin:0 0 6px 0}
+    table{width:100%; border-collapse:collapse; margin-top:10px}
+    th,td{border:1px solid #ddd; padding:6px; text-align:left}
+    thead th{background:#f3f4f6}
+    .muted{color:#666; font-size:12px}
+  </style>`;
+
+  const hoy = new Date().toLocaleString('es-PR');
+  const html = `
+  <html><head><meta charset="utf-8"><title>Exportación Citas</title>${style}</head>
+  <body>
+    <h2>${C.name||'Salon Pro'}</h2>
+    <div class="muted">${C.sub||''}</div>
+    <hr>
+    <h3>Exportación de Citas</h3>
+    <div class="muted">Generado: ${hoy}</div>
+    <table>
+      <thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c||''}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>
+    <script>window.addEventListener('load',()=>window.print());<\/script>
+  </body></html>`;
+
+  const w=window.open('','_blank');
+  w.document.write(html); w.document.close(); w.focus();
+}
+
+/* ====== Enlazar eventos ====== */
+function bind(){
+  ['f_cliente','f_emp','f_desde','f_hasta'].forEach(id=>{
+    const el=$( '#'+id ); el && el.addEventListener('input', renderCitas);
+  });
+  $('#f_todas').addEventListener('change', renderCitas);
+  $('#btnPDF').addEventListener('click', exportPDF);
+  $('#btnWAListado').addEventListener('click', waListado);
+
+  // Actualiza si otra pestaña modifica localStorage
+  window.addEventListener('storage', (e)=>{
+    if(e.key===K.CITAS || e.key===K.EMP || e.key===K.CFG) { renderTecnicas(); renderCitas(); }
+  });
+
+  // Refresco suave cada 30s
+  setInterval(renderCitas, 30000);
+}
+
+/* ====== Boot ====== */
+(function boot(){
+  renderTecnicas();
+  $('#f_desde').value = todayISO(); // por defecto desde hoy
+  renderCitas();
+  bind();
+})();
+</script>
+</body>
